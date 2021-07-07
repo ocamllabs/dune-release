@@ -291,8 +291,8 @@ let dune_project_name dir =
       List.fold_left
         (fun acc line ->
           (* sorry *)
-          match String.cut ~sep:"(name " (String.trim line) with
-          | Some (_, s) ->
+          match (acc, String.cut ~sep:"(name " (String.trim line)) with
+          | None, Some (_, s) ->
               Some
                 (String.trim
                    ~drop:(function ')' | ' ' -> true | _ -> false)
