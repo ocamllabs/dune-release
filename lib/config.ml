@@ -30,49 +30,42 @@ type t = {
 
 module Opam_repo_fork = struct
   type t = { remote : string; local : Fpath.t }
+
+  let err_msg =
+    Rresult.R.msg
+      "Dune-release configuration file is compromised: both local and remote \
+       field should be set"
+
+  let of_yaml_values dict =
+    let rec aux ((`Remote r, `Local l) as acc) = function
+      | [] -> Ok acc
+      | ("remote", `String s) :: t -> aux (`Remote (Some s), `Local l) t
+      | ("local", `String s) :: t ->
+          Fpath.of_string s >>= fun s -> aux (`Remote r, `Local (Some s)) t
+      | _ :: t -> aux acc t
+    in
+    aux (`Remote None, `Local None) dict >>= fun (`Remote r, `Local l) ->
+    Stdext.Option.to_result ~none:err_msg r >>= fun remote ->
+    Stdext.Option.to_result ~none:err_msg l >>= fun local ->
+    Ok { remote; local }
 end
 
-let of_yaml_exn str =
-  (* ouch *)
-  let lines = String.cuts ~empty:false ~sep:"\n" str in
-  let dict () =
-    List.map
-      (fun line ->
-        match String.cut ~sep:":" line with
-        | Some (k, v) -> (String.trim k, String.trim v)
-        | _ -> failwith "invalid format")
-      lines
-  in
-  let dict = dict () in
-  let find k = try Some (List.assoc k dict) with Not_found -> None in
-  let find_b k =
-    match find k with None -> None | Some s -> Some (bool_of_string s)
-  in
-  let valid = [ "user"; "remote"; "local"; "auto-open"; "keep-v" ] in
-  List.iter
-    (fun (k, _) ->
-      if not (List.mem k valid) then
-        Fmt.failwith "%S is not a valid configuration key." k)
-    dict;
-  let opam_repo_fork =
-    match (find "local", find "remote") with
-    | Some local_str, Some remote ->
-        Fpath.of_string local_str >>| fun local -> (local, remote)
-    | _ ->
-        Rresult.R.error_msg
-          "Dune-release configuration file is compromised: both local and \
-           remote field should be set"
-  in
-  opam_repo_fork >>| fun (local, remote) ->
-  {
-    user = find "user";
-    remote;
-    local;
-    auto_open = find_b "auto-open";
-    keep_v = find_b "keep-v";
-  }
-
-let of_yaml str = try of_yaml_exn str with Failure s -> R.error_msg s
+let of_yaml str =
+  Yaml.of_string str >>= function
+  | `O dict ->
+      let rec aux acc = function
+        | [] -> Ok acc
+        | ("user", `String s) :: t -> aux { acc with user = Some s } t
+        | ("remote", `String _) :: t -> aux acc t
+        | ("local", `String _) :: t -> aux acc t
+        | ("auto-open", `Bool b) :: t -> aux { acc with auto_open = Some b } t
+        | ("keep-v", `Bool b) :: t -> aux { acc with keep_v = Some b } t
+        | (key, _) :: _ ->
+            R.error_msgf "%S is not a valid configuration key." key
+      in
+      Opam_repo_fork.of_yaml_values dict >>= fun { remote; local } ->
+      aux { user = None; remote; local; auto_open = None; keep_v = None } dict
+  | _ -> R.error_msg "invalid format"
 
 let config_dir () =
   let cfg = Fpath.(v Xdg.config_dir / "dune") in
@@ -158,11 +151,6 @@ let create ?pkgs () =
   get_path () >>= fun file ->
   create_config ?pkgs file >>= fun _ -> Ok ()
 
-let find () =
-  get_path () >>= fun file ->
-  OS.File.exists file >>= fun exists ->
-  if exists then OS.File.read file >>= of_yaml >>| fun x -> Some x else Ok None
-
 let reset_terminal : (unit -> unit) option ref = ref None
 
 let cleanup () = match !reset_terminal with None -> () | Some f -> f ()
@@ -242,7 +230,7 @@ let token ~token ~dry_run () =
   | Some token -> Ok token
   | None -> config_token ~dry_run ()
 
-let file = lazy (find ())
+let file = lazy (load ())
 
 let read f ~default =
   Lazy.force file >>| function
