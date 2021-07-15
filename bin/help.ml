@@ -413,7 +413,7 @@ let help man_format topic commands =
   match topic with
   | None -> `Help (man_format, None)
   | Some topic -> (
-      let topics = "topics" :: commands @ List.map fst pages in
+      let topics = ("topics" :: commands) @ List.map fst pages in
       let topics = List.sort compare topics in
       let conv, _ = Cmdliner.Arg.enum (List.rev_map (fun s -> (s, s)) topics) in
       match conv topic with
